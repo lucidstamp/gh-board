@@ -1,10 +1,10 @@
 use serde::Deserialize;
 use serde_aux::prelude::*;
-use serde_json::{Number, Value};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemexDataType {
+struct MemexDataType {
     #[serde(deserialize_with = "deserialize_string_from_number")]
     pub id: String,
     pub settings: Option<MemexDataTypeSettings>,
@@ -12,13 +12,13 @@ pub struct MemexDataType {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemexDataTypeSettings {
+struct MemexDataTypeSettings {
     pub options: Option<Vec<MemexDataTypeOption>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemexDataTypeOption {
+struct MemexDataTypeOption {
     #[serde(deserialize_with = "deserialize_string_from_number")]
     pub id: String,
     pub name: String,
@@ -26,20 +26,28 @@ pub struct MemexDataTypeOption {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemexItem {
-    pub content_id: i64,
-    pub content_type: String,
-    pub content_repository_id: Value,
-    pub id: i64,
-    pub priority: Number,
-    pub updated_at: String,
+struct MemexItem {
+    // pub content_id: i64,
+    // pub content_type: String,
+    // pub content_repository_id: Value,
+    // pub id: i64,
+    // pub priority: Number,
+    // pub updated_at: String,
     pub memex_project_column_values: Vec<MemexProjectColumn>,
-    pub content: MemexContent,
+    // pub content: MemexContent,
 }
 
-impl MemexItem {
+pub trait IMemexItem {
+    fn contains_assignee(&self, username: &str) -> bool;
+    fn status_id(&self) -> String;
+    fn number(&self) -> u64;
+    fn title(&self) -> String;
+    fn assignees(&self) -> String;
+}
+
+impl IMemexItem for MemexItem {
     /// returns whether one of assignees matches
-    pub fn contains_assignee(&self, username: &str) -> bool {
+    fn contains_assignee(&self, username: &str) -> bool {
         let mut found = false;
         for col in &self.memex_project_column_values {
             match col {
@@ -57,7 +65,7 @@ impl MemexItem {
     }
 
     /// get status of the item
-    pub fn status_id(&self) -> String {
+    fn status_id(&self) -> String {
         let mut status_id = "".to_string();
         for col in &self.memex_project_column_values {
             match col {
@@ -71,7 +79,7 @@ impl MemexItem {
     }
 
     /// number of the issue
-    pub fn number(&self) -> u64 {
+    fn number(&self) -> u64 {
         let mut number = 0;
         for col in &self.memex_project_column_values {
             match col {
@@ -85,7 +93,7 @@ impl MemexItem {
     }
 
     /// title of the item
-    pub fn title(&self) -> String {
+    fn title(&self) -> String {
         let mut title = "".to_string();
         for col in &self.memex_project_column_values {
             match col {
@@ -99,7 +107,7 @@ impl MemexItem {
     }
 
     /// assignees list as a comma-separated string
-    pub fn assignees(&self) -> String {
+    fn assignees(&self) -> String {
         let mut out = "".to_string();
         for col in &self.memex_project_column_values {
             match col {
@@ -117,24 +125,17 @@ impl MemexItem {
     }
 }
 
-#[derive(Default, Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemexTitle {
-    pub raw: String,
-    pub html: String,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MemexAssignee {
+struct MemexAssignee {
     pub login: String,
-    pub id: i64,
+    // pub id: i64,
     // pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "memexProjectColumnId", content = "value")]
-pub enum MemexProjectColumn {
+enum MemexProjectColumn {
     #[serde(rename = "Title", deserialize_with = "deserialize_title")]
     Title { title: String, number: u64 },
     #[serde(rename = "Status", deserialize_with = "deserialize_status")]
@@ -142,14 +143,14 @@ pub enum MemexProjectColumn {
     #[serde(rename = "Assignees", deserialize_with = "deserialize_assignees")]
     Assignees { assignees: Vec<MemexAssignee> },
     #[serde(rename = "Repository", deserialize_with = "deserialize_repo")]
-    Repository { name: String },
+    Repository { _name: String },
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemexContent {
-    pub id: i64,
-}
+// #[derive(Debug, Clone, Deserialize)]
+// #[serde(rename_all = "camelCase")]
+// struct MemexContent {
+// id: i64,
+// }
 
 use serde::de::Deserializer;
 
@@ -203,5 +204,70 @@ where
     } else {
         let assignees: Vec<MemexAssignee> = serde_json::from_value(a).unwrap();
         Ok(assignees)
+    }
+}
+
+pub struct Board {
+    items: Vec<MemexItem>,
+    columns: Vec<MemexDataType>,
+}
+
+impl Board {
+    /// returns the items on the board
+    pub fn items(&self) -> Vec<impl IMemexItem> {
+        self.items.clone()
+    }
+
+    /// returns the human readable name of a status from its ID
+    pub fn get_status_name(&self, id: &str) -> Option<&str> {
+        let status = self.columns.iter().find(|c| c.id == "Status")?;
+        if let Some(settings) = status.settings.as_ref() {
+            let options = settings.options.as_ref()?;
+            let option = options.iter().find(|o| o.id == id)?;
+            return Some(&option.name);
+        }
+        None
+    }
+
+    /// initialize from local files - for testing
+    pub fn from_local_path(path: &str) -> Self {
+        let path_items = format!("{}/memex-items-data.json", path);
+        let data = std::fs::read_to_string(path_items).unwrap();
+        let items: Vec<MemexItem> = serde_json::from_str(&data).unwrap();
+
+        let path_columns = format!("{}/memex-columns-data.json", path);
+        let data = std::fs::read_to_string(path_columns).unwrap();
+        let columns: Vec<MemexDataType> = serde_json::from_str(&data).unwrap();
+
+        Self { items, columns }
+    }
+
+    /// initialize from remote HTML page
+    pub fn from_url(url: &str, user_session: &str, github_session: &str) -> Self {
+        let cookie = format!("user_session={}; _gh_sess={}", user_session, github_session);
+        let client = reqwest::blocking::Client::new()
+            .get(url)
+            .header("Cookie", cookie)
+            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36");
+        let data = client.send().unwrap().text().unwrap();
+        println!("downloaded: {} bytes", data.len());
+        let dom = tl::parse(&data, tl::ParserOptions::default()).unwrap();
+        let parser = dom.parser();
+        let memex_items_data = dom
+            .get_element_by_id("memex-items-data")
+            .expect("Failed to find #memex-items-data")
+            .get(parser)
+            .unwrap()
+            .inner_text(parser);
+        let memex_columns_data = dom
+            .get_element_by_id("memex-columns-data")
+            .expect("Failed to find #memex-columns-data")
+            .get(parser)
+            .unwrap()
+            .inner_text(parser);
+
+        let items: Vec<MemexItem> = serde_json::from_str(&memex_items_data).unwrap();
+        let columns: Vec<MemexDataType> = serde_json::from_str(&memex_columns_data).unwrap();
+        Self { items, columns }
     }
 }
