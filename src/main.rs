@@ -25,8 +25,10 @@ fn main() {
                 panic!("No user provided and no git user found");
             }
             println!("{}, last {} days:", gh_user.yellow(), days.green(),);
-            // let contrib = Contributions::from_local_file("/home/adm0/src/temp/contributions.html");
-            let contrib = Contributions::from_github(&gh_user);
+            let contrib = Contributions::from_local_file(
+                "/home/adm0/src/github.com/lucidstamp/gh-board/contributions.html",
+            );
+            // let contrib = Contributions::from_github(&gh_user);
             for (day, num) in &contrib.latest(days) {
                 let weekend = day.contains(", Sat") || day.contains(", Sun");
                 if weekend {

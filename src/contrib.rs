@@ -1,6 +1,37 @@
 use chrono::{Datelike, NaiveDate};
 use std::collections::BTreeMap as Map;
 
+fn human_date(month: u32, day: u32) -> Result<String, &'static str> {
+    let month_full_str = match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June", // 6
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October", // 10
+        11 => "November",
+        12 => "December",
+        _ => return Err("invalid month"),
+    };
+    let day_str = match day {
+        1 => "1st".to_owned(),
+        2 => "2nd".to_owned(),
+        3 => "3rd".to_owned(),
+        4..=20 => format!("{}th", day),
+        21 => "21st".to_owned(),
+        22 => "22nd".to_owned(),
+        23 => "23rd".to_owned(),
+        24..=30 => format!("{}th", day),
+        31 => "31st".to_owned(),
+        _ => return Err("invalid day"),
+    };
+    Ok(format!("{} {}", month_full_str, day_str))
+}
+
 #[derive(Debug)]
 pub struct Contributions {
     days: Map<String, u32>,
@@ -45,12 +76,56 @@ impl Contributions {
 
     /// parse contributions from HTML string
     pub fn from_str(contents: &str) -> Self {
+        if contents.is_empty() {
+            panic!("github user page is empty")
+        }
         let dom = tl::parse(&contents, tl::ParserOptions::default()).unwrap();
         let parser = dom.parser();
+
+        let mut days = Map::new();
+
+        let tooltips = dom
+            .get_elements_by_class_name("sr-only")
+            .into_iter()
+            .filter(|x| {
+                let node = x.get(parser).unwrap();
+                let name = node.as_tag().unwrap().name().as_utf8_str();
+                let dirty_inner = node.as_tag().unwrap().inner_text(parser);
+                name == "tool-tip" && dirty_inner.contains("contribution")
+            })
+            .map(|x| x.get(parser).unwrap())
+            .collect::<Vec<_>>();
+
+        let mut human_dates: Map<String, u32> = Map::new();
+        for t in tooltips {
+            let dirty_inner = t
+                .as_tag()
+                .unwrap()
+                .inner_text(parser)
+                .replace("\n", " ")
+                .replace(".", "");
+            // clean replace multiple spaces with single space
+            let inner = dirty_inner.split_whitespace().collect::<Vec<_>>().join(" ");
+
+            if inner.contains("1 contribution ") {
+                let parts = inner.split(" contribution on ").collect::<Vec<_>>();
+                human_dates.insert(parts[1].to_string(), 1);
+                continue;
+            }
+
+            let parts = inner.split(" contributions on ").collect::<Vec<_>>();
+            let amt = if parts[0] == "No" {
+                0
+            } else {
+                parts[0].parse::<u32>().unwrap()
+            };
+            human_dates.insert(parts[1].to_string(), amt);
+        }
+        // for (k, v) in &human_dates { println!("{} -> {}", k, v); }
+
         let cells = dom
             .get_elements_by_class_name("ContributionCalendar-day")
             .into_iter();
-        let mut days = Map::new();
         for c in cells {
             let p = c.get(parser).expect("parser failure");
             let attr = p.as_tag().expect("not a tag").attributes();
@@ -61,25 +136,28 @@ impl Contributions {
             if date.is_empty() {
                 continue;
             }
-            // parse date as chrono::NaiveDate and get weekday
+
             let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").unwrap();
             let date_str = format!("{}, {}", date, d.weekday());
-
-            let span = p.children().expect("no children").all(parser)[0]
-                .as_tag()
-                .unwrap()
-                .inner_text(parser);
-            // collect digits from the beginning of the string
-            let digits = span
-                .chars()
-                .take_while(|c| c.is_digit(10))
-                .collect::<String>();
-            let num = if digits.is_empty() {
-                0
-            } else {
-                digits.parse::<u32>().unwrap()
-            };
-            days.insert(date_str, num);
+            let month = d.month();
+            let day = d.day();
+            match human_date(month, day) {
+                Ok(dt) => match human_dates.get(&dt) {
+                    Some(num) => {
+                        days.insert(date_str, *num);
+                    }
+                    None => {
+                        println!("ERROR: {} -> {dt:?} NO MATCH IN TOOLTIPS ", date_str);
+                    }
+                },
+                Err(e) => {
+                    println!(
+                        "ERROR: {} FAILURE IN HUMAN DATE {}",
+                        date_str,
+                        e.to_string()
+                    );
+                }
+            }
         }
         Self { days }
     }
